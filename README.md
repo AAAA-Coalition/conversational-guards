@@ -1,13 +1,15 @@
 # conversational-guards
 
-Three output guards for LLM conversations, each shipped with a planted
+Five output guards for LLM conversations, each shipped with a planted
 witness. Pure Python, standard library only.
 
 They catch a class of failure that content filters do not see: **a model that
 says nothing forbidden and is still failing the conversation.**
 
 ```python
-from conversational_guards import profile_bleed, monologue_ratio, script_derail
+from conversational_guards import (profile_bleed, monologue_ratio,
+                                   script_derail, untested_incapacity,
+                                   unwitnessed_confirmation)
 
 v = profile_bleed("Thanks for the figures. imagine we had an hour just for us.",
                   profile="professional")
@@ -17,13 +19,13 @@ v = profile_bleed("Thanks for the figures. imagine we had an hour just for us.",
 
 ---
 
-## Why these three
+## Why these five
 
 Existing guard libraries filter what a model says: prompt injection, PII,
 secrets, toxicity, system-prompt leakage. They do that well, and this library
 does not duplicate them. Use both.
 
-These three come from running conversational bots in production for several
+These five come from running conversational bots in production for several
 months. Each one is a failure we actually shipped to a real person before we
 caught it.
 
@@ -75,6 +77,57 @@ entirely in Greek is legitimate and passes untouched — which is why the body
 ratio is mandatory, not a refinement.
 
 ---
+
+### 4. Untested incapacity
+
+**The failure.** The owner asked a bot on Telegram for a voice message. It
+answered, in text: *"The Telegram integration I have access to only sends text
+messages. I don't have a tool to generate and send actual voice/audio files."*
+
+Every word was false. The binary serving that bot contained
+`sendVoiceResponse` seven times, and the speech backend returned 18,864 bytes
+of MP3 when called directly. One configuration field was set to `text`, and in
+that mode the client never calls the synthesiser. The model had no way to
+know, so it reported the only thing it could observe: that no voice had ever
+left.
+
+That is the dangerous shape. It is not a hallucination — it is a conclusion
+drawn from a missing lever, and it reads exactly like a fact.
+
+**What the guard does, and what it cannot.** It cannot know whether an
+incapacity is true; nothing in the text can. It flags an incapacity asserted
+with *no evidence of an attempt*. A reply that says why the attempt failed — a
+status code, an exception, a refusal — passes, because that sentence can be
+checked by whoever reads it.
+
+**Why it earns a guard.** An unqualified "I cannot" closes the question.
+Nobody re-opens it, and the capability stays dark. One of ours stayed dark for
+the eighty days a publishing service woke every fifteen minutes and found
+nothing to publish.
+
+### 5. Unwitnessed confirmation
+
+**The failure**, found by an adversarial reviewer fifteen minutes after the
+code shipped. A tool let an agent mark a group task as confirmed by a human:
+
+```python
+def confirm(group, what, by, human=True):   # <- defaulted to True
+```
+
+Every call therefore asserted that a human had confirmed, including the calls
+where none had. And `what=""` matched every task in the group, so an empty
+string confirmed the lot.
+
+Neither defect is exotic. A default that asserts the safe-looking value, and
+an empty selector that means *all*, are among the most common ways a
+human-in-the-loop gate quietly stops being one.
+
+**What the guard does.** It refuses rather than warns. `human_confirmed` must
+be stated by the caller — `None` is a refusal, not a default — and the
+designator must actually designate something.
+
+**Why refuse instead of warn.** A warning on a confirmation path is read once
+and then never again. The gate either holds or it does not.
 
 ## Relation to OWASP
 
@@ -134,7 +187,7 @@ assert g.self_test(verbose=False) == 1
 
 ---
 
-## Three design decisions worth stating
+## Four design decisions worth stating
 
 **Guards refuse to judge rather than guess.** `monologue_ratio` returns *not
 measurable* below three human turns — never *healthy*. Reporting green on an
